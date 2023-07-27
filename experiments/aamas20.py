@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 import traceback
 import numpy as np
+import pandas as pd
 
 class aamas20(experiment):
 
@@ -41,6 +42,9 @@ class aamas20(experiment):
         ignore_avf_difference_rewards = params['use-avf-dr']
         pid = params['pid']
         logs_dir = params['logs-dir']
+        user_proportion = params['user-proportion']
+        is_participation_fixed = params['is-participation-fixed']
+        obligatory_toll_percentile = params['obligatory-toll-percentile']
 
         if alg not in aamas20.__algs_list:
             print('Algorithm "%s" does not exist!' % alg)
@@ -51,13 +55,13 @@ class aamas20(experiment):
         sys.stdout = open('%s/%s_%s.txt' % (logs_dir, timestamp, pid), 'w')
 
         fname = open('%s/%s_%s_summary.txt' % (logs_dir, timestamp, pid), 'w')
-        fname.write('pid\talg\tepisodes\tnet\tk\talpha_decay\tepsilon_decay\ttime_flexibility_distribution\trevenue_division_rate\tagent_vehicles_factor\trep\tavg-tt\treal\test\truntime (s)\n')
+        fname.write('pid\talg\tepisodes\tnet\tk\talpha_decay\tepsilon_decay\ttime_flexibility_distribution\trevenue_division_rate\tagent_vehicles_factor\trep\tuser-proportion\tis-participation-fixed\tobligatory-toll-percentile\tavg-tt\treal\test\truntime (s)\n')
         fname.flush()
 
         for it in xrange(1, rep+1):
         
             print('========================================================================')
-            print(' algorithm=%s, episodes=%d, network=%s, k=%d, alpha_decay=%f, epsilon_decay=%f, time_flexibility_distribution=%s %s, revenue_division_rate=%f, agent_vehicles_factor=%f, replication=%i' % (alg, episodes, net_name, K, alpha_decay, epsilon_decay, flex_dist_name, flex_dist_params, revenue_division_rate, avf, it))
+            print(' algorithm=%s, episodes=%d, network=%s, k=%d, alpha_decay=%f, epsilon_decay=%f, time_flexibility_distribution=%s %s, revenue_division_rate=%f, agent_vehicles_factor=%f, replication=%i, user_proportion=%f, is_participation_fixed=%s, obligatory_toll_percentile=%f' % (alg, episodes, net_name, K, alpha_decay, epsilon_decay, flex_dist_name, flex_dist_params, revenue_division_rate, avf, it, user_proportion, is_participation_fixed, obligatory_toll_percentile))
             print('========================================================================\n')
 
             alt_route_file = None
@@ -111,7 +115,10 @@ class aamas20(experiment):
                     pass
 
                 # run the simulation
-                values = run_simulation(P, episodes, alpha=1.0, epsilon=1.0, alpha_decay=alpha_decay, epsilon_decay=epsilon_decay, min_alpha=0.0, min_epsilon=0.0, normalise_costs=True, regret_as_cost=REGRET_AS_COST, extrapolate_costs=EXTRAPOLATE_COSTS, use_app=USE_APP, difference_rewards=DIFFERENCE_REWARDS, a_posteriori_MCT=A_POSTERIORI_MCT, indifferent_MCT=INDIFFERENT_MCT, weighted_MCT=WEIGHTED_MCT, delta_tolling=DELTA_TOLLING, revenue_division_rate=revenue_division_rate, time_flexibility_distribution=flex_dist, agent_vehicles_factor=avf, ignore_avf_difference_rewards=ignore_avf_difference_rewards, plot_results=False, dynamic_plot_results=False, stat_all=True, stat_regret_diff=STAT_REGRET_DIFF, print_OD_pairs_every_episode=PRINT_OD_PAIRS_EVERY_EPISODE)
+                values = run_simulation(P, episodes, alpha=1.0, epsilon=1.0, alpha_decay=alpha_decay, epsilon_decay=epsilon_decay, min_alpha=0.0, min_epsilon=0.0, normalise_costs=False, regret_as_cost=REGRET_AS_COST, extrapolate_costs=EXTRAPOLATE_COSTS, use_app=USE_APP, difference_rewards=DIFFERENCE_REWARDS, a_posteriori_MCT=A_POSTERIORI_MCT, indifferent_MCT=INDIFFERENT_MCT, weighted_MCT=WEIGHTED_MCT, delta_tolling=DELTA_TOLLING, revenue_division_rate=revenue_division_rate, time_flexibility_distribution=flex_dist, agent_vehicles_factor=avf, ignore_avf_difference_rewards=ignore_avf_difference_rewards, plot_results=False, dynamic_plot_results=False, stat_all=True, stat_regret_diff=STAT_REGRET_DIFF, print_OD_pairs_every_episode=PRINT_OD_PAIRS_EVERY_EPISODE, user_proportion=user_proportion, is_participation_fixed=is_participation_fixed, obligatory_toll_percentile=obligatory_toll_percentile)
+                df = pd.DataFrame(values[3])
+                df = df.rename(columns=df.iloc[0]).drop(df.index[0])
+                df.to_csv('%s/%s_%s_strategies.csv' % (logs_dir, timestamp, pid), index=False)
 
             except Exception as e:
                 print('[ERROR] %s' % e)
@@ -122,7 +129,7 @@ class aamas20(experiment):
             runtime = time.time() - start
 
             # write summary
-            fname.write('%s\t%s\t%d\t%s\t%d\t%f\t%f\t%s %s\t%f\t%f\t%d\t%f\t%f\t%f\t%f\n' % (pid, alg, episodes, net_name, K, alpha_decay, epsilon_decay, flex_dist_name, flex_dist_params, revenue_division_rate, avf, it, values[0], values[1], values[2], runtime))
+            fname.write('%s\t%s\t%d\t%s\t%d\t%f\t%f\t%s %s\t%f\t%f\t%d\t%f\t%s\t%f\t%f\t%f\t%f\t%f\n' % (pid, alg, episodes, net_name, K, alpha_decay, epsilon_decay, flex_dist_name, flex_dist_params, revenue_division_rate, avf, it, user_proportion, is_participation_fixed, obligatory_toll_percentile, values[0], values[1], values[2], runtime))
             fname.flush()
 
             print('\n========================================================================\n')
@@ -352,9 +359,9 @@ class aamas20(experiment):
                             help='number of roads')
         subp.add_argument('--rep', dest='rep', action='store', default=1, type=int,
                             help='number of trials per episode')
-        subp.add_argument('--decay-eps', dest='decay-eps', action='store', default=0.99, type=float,
+        subp.add_argument('--decay-eps', dest='decay-eps', action='store', default=0.995, type=float,
                             help='decay for epsilon')
-        subp.add_argument('--decay-alpha', dest='decay-alpha', action='store', default=0.99, type=float,
+        subp.add_argument('--decay-alpha', dest='decay-alpha', action='store', default=0.995, type=float,
                             help='decay for alpha')
         subp.add_argument('--revenue-division-rate', dest='revenue-division-rate', action='store', default=0.00, type=float,
                             help='fraction of the total revenue (collected from tolls) to be divided among the agents')
@@ -372,6 +379,17 @@ class aamas20(experiment):
                             help='the folder where the log files should be written')
         subp.add_argument('--validate', dest='validate', action='store_true', 
                             help='validate the experiment script')
+        subp.add_argument('--user-proportion', dest='user-proportion', default=1, type=float,
+                            help='proportion [0.0, 1.0] of drivers that will be users of the toll system')
+        subp.add_argument('--obligatory-toll-percentile', dest='obligatory-toll-percentile', default=0, type=float,
+                            help='top [0.0, 1.0] percentile of links that will require tolling for their respective routes')
+
+        participation = subp.add_mutually_exclusive_group()
+        participation.add_argument('--fixed-participation', dest='is-participation-fixed', action='store_true',
+                            help='participation is made fixed')
+        participation.add_argument('--variable-participation', dest='is-participation-fixed', action='store_false',
+                            help='participation is made variable')
+
         subp.set_defaults(exp_class='aamas20')
 
     #-----------------------------------------------------------------------

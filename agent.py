@@ -3,10 +3,15 @@ import numpy as np
 #=======================================================================
 
 class Driver:
-	def __init__(self, od_pair, actions, initial_costs=None, extrapolate_costs=True, navigation_app=None, time_flexibility=0.5, flow=1.0): 
+	def __init__(self, od_pair, actions, initial_costs=None, extrapolate_costs=True, navigation_app=None, time_flexibility=0.5, flow=1.0, is_user=True, is_participation_fixed=True):
 		
 		#self.__name = 'Driver_%i' % identifier
 		self.__OD_pair = od_pair
+
+		# whether the driver participates in the toll system
+		self.__is_user = is_user
+		self.__is_participation_fixed = is_participation_fixed
+		self.__available_states = [self.__is_user] if self.__is_participation_fixed else [True, False]
 		
 		# whether the average cost estimations should extrapolate 
 		# the experimented costs
@@ -14,9 +19,10 @@ class Driver:
 		
 		# the navigation app of the driver
 		self.__navigation_app = navigation_app
-		
+
 		# strategy (policy)
-		self.__strategy = { a: 0.0 for a in actions }#initialising with initial_costs[a] produces almost the same results, but is more difficult to explain...
+		#self.__strategy = { a: 0.0 for a in actions }#initialising with initial_costs[a] produces almost the same results, but is more difficult to explain...
+		self.__strategy = {(a, u): 0.0 for a in actions for u in self.__available_states}
 		
 		# sum of the experimented costs (used to obtain the average cost)
 		self.__sum_cost = 0.0
@@ -34,7 +40,7 @@ class Driver:
 		# where d is the total flow of the current agent's OD pair; the general setting is flow=1.0
 		self.__flow = flow
 
-		# for each action, store an [sum, samples, extrapolated_sum, avg, last, last_time] array, where:
+		'''# for each action, store an [sum, samples, extrapolated_sum, avg, last, last_time] array, where:
 		# * sum is the sum of costs experimented for this action (considering only those times when it is, in fact, chosen), 
 		# * samples is the number of samples composing the sum (the number of times the action was chosen), 
 		# * extrapolated_sum is an extrapolation of the sum of costs (when the action is not the chosen one, then the sum is incremented with the last value, given in the next field) and 
@@ -45,7 +51,11 @@ class Driver:
 		
 		# estimated regret
 		self.__estimated_regret = None
-		self.__estimated_action_regret = { a: 0.0 for a in actions }
+		self.__estimated_action_regret = { a: 0.0 for a in actions }'''
+
+		self.__history_actions_costs = {(a, u): [0.0, 0.0, 0.0, 0.0, 0.0 if not initial_costs else initial_costs[a], 0.0] for a in actions for u in self.__available_states}
+		self.__estimated_regret = None
+		self.__estimated_action_regret = {(a, u): 0.0 for a in actions for u in self.__available_states}
 
 		# real regret
 		self.__real_regret = 0.0
@@ -64,6 +74,12 @@ class Driver:
 
 	def get_flow(self):
 		return self.__flow
+
+	def is_user(self):
+		return self.__is_user
+
+	def get_available_states(self):
+		return self.__available_states
 	
 	# calculate the driver's estimated regret
 	def __estimate_regret(self):
@@ -71,11 +87,11 @@ class Driver:
 		self.__estimated_regret = (self.__sum_cost / self.__iteration) - self.__min_avg_cost
 		
 		# estimated regret per action
-		for a in self.__history_actions_costs:
-			if not self.__extrapolate_costs and self.__history_actions_costs[a][1] == 0: #just to handle initial cases
-				self.__estimated_action_regret[a] = 0.0
+		for au in self.__history_actions_costs:
+			if not self.__extrapolate_costs and self.__history_actions_costs[au][1] == 0: #just to handle initial cases
+				self.__estimated_action_regret[au] = 0.0
 			else:
-				self.__estimated_action_regret[a] = self.__history_actions_costs[a][3] - self.__min_avg_cost
+				self.__estimated_action_regret[au] = self.__history_actions_costs[au][3] - self.__min_avg_cost
 	
 	# calculate the real regret given the real minimum average cost
 	def update_real_regret(self, real_min_avg):
@@ -85,13 +101,13 @@ class Driver:
 		return self.__real_regret
 
 	def get_estimated_regret(self, action=None):
-		if action == None:
+		if action is None:
 			return self.__estimated_regret
 		else:
-			return self.__estimated_action_regret[action]
+			return self.__estimated_action_regret[(action, self.__is_user)]
 	
 	def get_last_cost(self):
-		return self.__history_actions_costs[self.__last_action][4]
+		return self.__history_actions_costs[(self.__last_action, self.__is_user)][4]
 	
 	def get_average_cost(self):
 		return self.__sum_cost / self.__iteration
@@ -106,13 +122,21 @@ class Driver:
 		
 		# increment the iteration counter
 		self.__iteration += 1
-		
+
 		# epsilon-greedy: choose the action with highest probability with probability 1-epsilon
 		# otherwise, choose any action uniformly at random
 		if np.random.random() < epsilon:
-			self.__last_action = int(np.random.random() * len(self.__strategy)) #slightly slower than random.random, but it is less biased
+			#self.__last_action = int(np.random.random() * len(self.__strategy)) #slightly slower than random.random, but it is less biased
+
+			a, u = list(self.__strategy.keys())[int(np.random.random() * len(self.__strategy))]
+			self.__last_action = a
+			self.__is_user = u
 		else:
-			self.__last_action = max(self.__strategy, key=self.__strategy.get)
+			#self.__last_action = max(self.__strategy, key=self.__strategy.get)
+
+			a, u = max(self.__strategy, key=self.__strategy.get)
+			self.__last_action = a
+			self.__is_user = u
 
 		# choose the action
 		return self.__last_action
@@ -120,9 +144,13 @@ class Driver:
 	#-------------------------------------------------------------------
 	
 	# compute the toll values
-	def compute_toll_dues(self, cost, a_posteriori_MCT=False, indifferent_MCT=False, weighted_MCT=False, delta_tolling=False, thesis_delta_tolling=False, additional_cost=0.0):
-		
-		if indifferent_MCT:
+	def compute_toll_dues(self, cost, problem, a_posteriori_MCT=False, indifferent_MCT=False, weighted_MCT=False, delta_tolling=False, thesis_delta_tolling=False, additional_cost=0.0, additional_cost_list=[]):
+
+		if not self.__is_user and not problem.is_toll_obligatory(self.__OD_pair, self.__last_action):
+			# if the driver is not a user then it doesn't pay tolls as long as paying is optional
+			self.__toll_dues = 0.0
+
+		elif indifferent_MCT:
 			# indifferent preferences MCT
 			# define a toll that makes agents indifferent with respect to time and money (i.e., it overrides their preferences)
 			toll_mct = (cost - additional_cost) # original MCT (the marginal cost itself)
@@ -135,18 +163,23 @@ class Driver:
 			self.__toll_dues = additional_cost / self.__time_flexibility # additional_cost is the weighted marginal cost
 
 		elif delta_tolling:
-			prev_cost = self.__history_actions_costs[self.__last_action][5]
+			prev_cost = self.__history_actions_costs[(self.__last_action, self.__is_user)][5]
 			self.__toll_dues = prev_cost - additional_cost
 
 		elif thesis_delta_tolling: # old implementation used on my thesis (not incorrect, but less effective)
-			prev_cost = self.__history_actions_costs[self.__last_action][4]
+			prev_cost = self.__history_actions_costs[(self.__last_action, self.__is_user)][4]
 			self.__toll_dues = prev_cost - additional_cost
 
 		else:
 			# MCT with preferences
 			# Note 1: this is equivalent to the original MCT if the preference parameter is 0.5 for all agents
 			# Note 2: the expression is multiplied by 2 to make it fully compatible with the original MCT formulation (and to make the code retro-compatible with previous algorithms and validations)
-			self.__toll_dues = cost - additional_cost # marginal cost
+			PAYMENT_MODE = 'link' # options: 'link', 'route'
+			if PAYMENT_MODE == 'link':
+				summed_additional_cost = sum([link_cost if problem.is_toll_obligatory_on_link(l) else 0 for l, link_cost in additional_cost_list])
+				self.__toll_dues = cost - summed_additional_cost # marginal cost
+			else:
+				self.__toll_dues = cost - additional_cost # marginal cost
 
 		return self.__toll_dues
 
@@ -170,9 +203,10 @@ class Driver:
 		
 		# store the dictionary locally to improve performance
 		self_hac = self.__history_actions_costs
+		self_au = (self.__last_action, self.__is_user)
 
 		# update most recent travel time of current taken action (useful for computing deltatolling)
-		self_hac[self.__last_action][5] = cost 
+		self_hac[self_au][5] = cost
 		
 		# if necessary, update the cost following the a posteriori MCT formulation 
 		if a_posteriori_MCT or delta_tolling:
@@ -189,28 +223,28 @@ class Driver:
 		# update the costs history
 		
 		# Pt1: for the current action
-		self_hac[self.__last_action][0] += cost #add current cost
-		self_hac[self.__last_action][1] += 1 #increment number of samples
-		self_hac[self.__last_action][4] = cost #update last cost
+		self_hac[self_au][0] += cost #add current cost
+		self_hac[self_au][1] += 1 #increment number of samples
+		self_hac[self_au][4] = cost #update last cost
 		#NOTE: position 5 in the array is updated earlier to keep the travel time (instead of cost)
 
 		# Pt2: for all actions...
 		self.__min_avg_cost = float('inf')
-		for a in self_hac:
+		for au in self_hac:
 			
 			# update the extrapolated sum
-			self_hac[a][2] += self_hac[a][4] #add last cost to extrapolate estimation
+			self_hac[au][2] += self_hac[au][4] #add last cost to extrapolate estimation
 		
 			# compute the average cost
 			if self.__extrapolate_costs:
-				avg_cost = self_hac[a][2] / self.__iteration
+				avg_cost = self_hac[au][2] / self.__iteration
 			else:
 				try: #just to handle initial cases
-					avg_cost = self_hac[a][0] / self_hac[a][1]
+					avg_cost = self_hac[au][0] / self_hac[au][1]
 				except ZeroDivisionError:
 					avg_cost = 0
 			
-			self_hac[a][3] = avg_cost
+			self_hac[au][3] = avg_cost
 
 			# incorporate the recommendation into the avg_cost;
 			# observe that the recommendation is only used for
@@ -218,7 +252,7 @@ class Driver:
 			# of maximising reward, the former term)  
 			if recommendation:
 				p=0.5
-				avg_cost = avg_cost*(1-p) + recommendation[a]*p
+				avg_cost = avg_cost*(1-p) + recommendation[au]*p
 			
 			if avg_cost < self.__min_avg_cost:
 				self.__min_avg_cost = avg_cost
@@ -241,8 +275,9 @@ class Driver:
 	def __update_strategy_Q_learning(self, normalised_cost, alpha):
 		
 		normalised_utility = 1 - normalised_cost
-		
-		self.__strategy[self.__last_action] = (1 - alpha) * self.__strategy[self.__last_action] + alpha * normalised_utility
+
+		self_au = (self.__last_action, self.__is_user)
+		self.__strategy[self_au] = (1 - alpha) * self.__strategy[self_au] + alpha * normalised_utility
 
 #=======================================================================
 

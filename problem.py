@@ -1,3 +1,5 @@
+import math
+
 from py_expression_eval import Parser
 from sympy import diff, symbols
 
@@ -10,6 +12,8 @@ class ProblemInstance:
 		self.__N = {}
 		self.__L = {}
 		self.__routes = {}
+		self.__l_to_r = {}
+		self.__is_route_obligatory = {}
 		self.__normalisation_factor_routes = float('-inf')
 		
 		self.__create_graph(network_name)
@@ -27,7 +31,7 @@ class ProblemInstance:
 		# created with maximum flow)
 		for od in self.get_OD_pairs():
 			for r in self.get_routes(od):
-				r.set_free_flow_travel_time(r.get_cost(False), r.get_cost(True))
+				r.set_free_flow_travel_time(r.get_cost(False), r.get_cost(True), r.get_cost_list())
 		
 	def get_route_set_size(self, od=None):
 		if od:
@@ -180,7 +184,7 @@ class ProblemInstance:
 				try:
 					function_deriv.evaluate({func_tuple[0]: 0.0})
 				except ZeroDivisionError:
-					if func_tuple[4] == None:
+					if func_tuple[4] is None:
 						# store a single warning message to avoid printing multiple ones
 						func_tuple[4] = '[WARNING] The derivative (%s) of function %s (%s) has a parameter as divisor!' % (func_tuple[3], taglist[4], func_tuple[2])
 				
@@ -269,8 +273,17 @@ class ProblemInstance:
 				r.set_normalisation_factor(self.__normalisation_factor_routes)
 		
 		f.close()
-		
-	# reset the graph non-fixed attributes (e.g., flow on each link)
+
+		self.__link_has_tolls = {l: False for l in self.__L.keys()}
+
+		# reverse index of link -> route
+		self.__l_to_r = {l: [] for l in self.__L.keys()}
+		for routes in self.__routes.values():
+			for r in routes:
+				for l in r.get_links():
+					self.__l_to_r[l].append(r)
+
+# reset the graph non-fixed attributes (e.g., flow on each link)
 	def reset_graph(self):
 		# reset the flow and costs on links
 		for l in self.__L:
@@ -280,7 +293,32 @@ class ProblemInstance:
 		for od in self.get_OD_pairs():
 			for r in self.get_routes(od):
 				r.update_cost()
-	
+
+	def update_obligatory_tolling(self, percentile):
+		for routes in self.__routes.values():
+			for r in routes:
+				r.obligatory_toll = False
+
+		links = [(key, l.get_flow()) for key, l in self.__L.items()]
+		links.sort(key=lambda x: x[1])
+		links.reverse()
+		links = [key for key, _ in links]
+		cutoff_i = int(math.floor(percentile * len(links)))  # before __link_has_tolls: ceil
+		for i in xrange(cutoff_i):
+			self.__link_has_tolls[links[i]] = True
+			for r in self.__l_to_r[links[i]]:
+				r.obligatory_toll = True
+		for i in xrange(cutoff_i, len(links)):
+			self.__link_has_tolls[links[i]] = False
+
+		pass
+
+	def is_toll_obligatory(self, od, route_i):
+		return self.__routes[od][route_i].obligatory_toll
+
+	def is_toll_obligatory_on_link(self, l):
+		return self.__link_has_tolls[l]
+
 	# evaluate the cost of a given assignment, where
 	# - solution is the assignment itself (i.e., flow of each OD-route pair)
 	# - solution_time_flexibility contains the aggregate time flexibility of agents (useful for tolling)
@@ -451,11 +489,14 @@ class Link:
 # represents a route
 class Route:
 	def __init__(self, route_str, problem_instance):
-		
+
+		self.obligatory_toll = False
+
 		self.__links = []
 		self.__name = ''
 		
 		self.__cost = 0.0
+		self.__cost_list = []
 		self.__normalised_cost = 0.0
 
 		# store the weighted marginal cost of the route (i.e., the marginal 
@@ -485,10 +526,12 @@ class Route:
 		
 		# the free flow travel time
 		self.__free_flow_travel_time = 0.0
+		self.__free_flow_travel_time_list = []
 		self.__free_flow_travel_time_normalised = 0.0
 		
-	def set_free_flow_travel_time(self, fftt, fftt_normalised):
+	def set_free_flow_travel_time(self, fftt, fftt_normalised, fftt_cost_list):
 		self.__free_flow_travel_time = fftt
+		self.__free_flow_travel_time_list = fftt_cost_list
 		self.__free_flow_travel_time_normalised = fftt_normalised
 	
 	def get_free_flow_travel_time(self, normalise=False):
@@ -496,6 +539,9 @@ class Route:
 			return self.__free_flow_travel_time_normalised
 		else:
 			return self.__free_flow_travel_time
+
+	def get_free_flow_travel_time_list(self):
+		return self.__free_flow_travel_time_list
 		
 	def set_normalisation_factor(self, normalisation_factor):
 		self.__normalisation_factor = normalisation_factor
@@ -504,13 +550,16 @@ class Route:
 	# update the route cost
 	def update_cost(self):
 		self.__cost = 0.0
+		self.__cost_list = []
 		self.__normalised_cost = 0.0
 
 		self.__weighted_marginal_cost = 0.0
 		self.__normalised_weighted_marginal_cost = 0.0
 
 		for l in self.__links:
-			self.__cost += self.__problem_instance.get_link(l).get_cost()
+			link_cost = self.__problem_instance.get_link(l).get_cost()
+			self.__cost += link_cost
+			self.__cost_list.append((l, link_cost))
 			self.__weighted_marginal_cost += self.__problem_instance.get_link(l).get_marginal_cost()
 			
 		if self.__normalisation_factor:
@@ -525,6 +574,9 @@ class Route:
 			return self.__normalised_cost
 		else:
 			return self.__cost
+
+	def get_cost_list(self):
+		return self.__cost_list
 
 	def get_weighted_marginal_cost(self, normalise=False):
 		if normalise:

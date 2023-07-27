@@ -5,6 +5,7 @@ import sys
 import random
 import scipy.stats as sc_stats
 import matplotlib.pyplot as plt
+import numpy as np
 from decimal import Decimal
 
 # return the cost observed by agent d after taking its action
@@ -47,7 +48,7 @@ def get_cost(P, d, difference_rewards, difference_reward_per_route, NORMALISE_CO
 # * stat_all: whether or not a report with simulation statistics should be printed after the simulation is completed
 # * stat_regret_diff: whether or not the above report should print additional regret statistics (absolute and relative difference between estimated and real regrets) as well
 # * print_OD_pairs_every_episode: whether or not information about each OD pair should be printed on every episode
-def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99, epsilon_decay=0.99, min_alpha=0.0, min_epsilon=0.0, normalise_costs=True, regret_as_cost=True, extrapolate_costs=False, use_app=False, difference_rewards=False, a_posteriori_MCT=False, indifferent_MCT=False, weighted_MCT=False, delta_tolling=False, thesis_delta_tolling=False, revenue_division_rate=0.0, time_flexibility_distribution=None, agent_vehicles_factor=1.0, ignore_avf_difference_rewards=True, plot_results=False, dynamic_plot_results=False, stat_all=True, stat_regret_diff=True, print_OD_pairs_every_episode=True):
+def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99, epsilon_decay=0.99, min_alpha=0.0, min_epsilon=0.0, normalise_costs=True, regret_as_cost=True, extrapolate_costs=False, use_app=False, difference_rewards=False, a_posteriori_MCT=False, indifferent_MCT=False, weighted_MCT=False, delta_tolling=False, thesis_delta_tolling=False, revenue_division_rate=0.0, time_flexibility_distribution=None, agent_vehicles_factor=1.0, ignore_avf_difference_rewards=True, plot_results=False, dynamic_plot_results=False, stat_all=True, stat_regret_diff=True, print_OD_pairs_every_episode=True, user_proportion=1.0, is_participation_fixed=True, obligatory_toll_percentile=0.0):
 	
 	ITERATIONS = iterations
 	
@@ -71,6 +72,7 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 	plotter_regret = None
 	if plot_results:
 		plotter = Plotter(x_axis_range=range(1,ITERATIONS+1), title='Average travel time along episodes', x_axis_label='episodes', y_axis_label='average travel time')
+		plotter_u = Plotter(x_axis_range=range(1, ITERATIONS+1), title='User participation along episodes', x_axis_label='episodes', y_axis_label='participation')
 		plotter_regret = Plotter(x_axis_range=range(1,ITERATIONS+1), title='Average regret along episodes', x_axis_label='episodes', y_axis_label='regret')
 
 	# create a dynamic plotter
@@ -126,7 +128,9 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 			flow = agent_vehicles_factor
 			if i == 0 and remainder > 0.0:
 				flow = remainder
-			D.append(Driver(od, actions, initial_costs=initial_costs, extrapolate_costs=extrapolate_costs, navigation_app=app_to_agent, time_flexibility=time_flexibility_distribution.sample(), flow=flow))
+
+			is_user = np.random.random() < user_proportion
+			D.append(Driver(od, actions, initial_costs=initial_costs, extrapolate_costs=extrapolate_costs, navigation_app=app_to_agent, time_flexibility=time_flexibility_distribution.sample(), flow=flow, is_user=is_user, is_participation_fixed=is_participation_fixed))
 	
 	# check if the sum of agents' flow match the OD matrix
 	od_flow_check = { od: Decimal('0.0') for od in P.get_OD_pairs() }
@@ -172,7 +176,7 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 
 		# print the report headings
 		head1 = '\tgeneral\t\t'
-		head2 = 'it\tavg-tt\treal\test'
+		head2 = 'it\tavg-tt\treal\test\tu'
 		if stat_regret_diff:
 			head1 = '%s\t\t' % (head1)
 			head2 = '%s\tdiff\treldiff' % (head2)
@@ -226,13 +230,16 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 		# update network
 
 		# compute the (non-normalised) average travel time and the (normalised) total cost
-		v, norm_v = P.evaluate_assignment(S, S_time_flexibility) 
+		v, norm_v = P.evaluate_assignment(S, S_time_flexibility)
+		user_count = sum([1.0 if d.is_user() else 0.0 for d in D])
+		user_ratio = user_count / len(D)
 
 		if v < best:
 			best = v
 		
 		if plot_results:
 			plotter.add('average travel time', v)
+			plotter_u.add('participation ratio', user_ratio)
 
 		if dynamic_plot_results:
 			dyn_plotter.update(iteration, v)
@@ -311,6 +318,9 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 			
 			if revenue_division_rate > 0.0:
 				tolls_share_per_OD = [ 0.0 for _ in xrange(len(P.get_OD_pairs())) ]
+				user_flow_per_OD = [ 0.0 for _ in xrange(len(P.get_OD_pairs())) ]
+
+			P.update_obligatory_tolling(obligatory_toll_percentile)
 
 			for d in D:
 				
@@ -326,19 +336,24 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 				# other methods need the free flow travel time
 				else:
 					additional_cost = route.get_free_flow_travel_time(NORMALISE_COSTS)
+					additional_cost_list = route.get_free_flow_travel_time_list()
 
 				# compute the toll
-				toll = d.compute_toll_dues(cost, a_posteriori_MCT=a_posteriori_MCT, indifferent_MCT=indifferent_MCT, weighted_MCT=weighted_MCT, delta_tolling=delta_tolling, thesis_delta_tolling=thesis_delta_tolling, additional_cost=additional_cost)
+				toll = d.compute_toll_dues(cost, P, a_posteriori_MCT=a_posteriori_MCT, indifferent_MCT=indifferent_MCT, weighted_MCT=weighted_MCT, delta_tolling=delta_tolling, thesis_delta_tolling=thesis_delta_tolling, additional_cost=additional_cost, additional_cost_list=additional_cost_list)
 
 				# update the total revenue 
 				if revenue_division_rate > 0.0:
 					od = P.get_OD_order(d.get_OD_pair())
-					tolls_share_per_OD[od] += toll
+					# use only the flow of users, since non-users don't pay tolls (non-user's toll = 0.0)
+					if d.is_user():
+						tolls_share_per_OD[od] += toll
+						user_flow_per_OD[od] += d.get_flow()
 
 			# compute the share to be redistributed with the agents
 			if revenue_division_rate > 0.0:
 				for od in P.get_OD_pairs():
-					tolls_share_per_OD[P.get_OD_order(od)] = (tolls_share_per_OD[P.get_OD_order(od)] * revenue_division_rate) / P.get_OD_flow(od)
+					# divide by accumulated user flow instead of P.get_OD_flow(od) in order to discount non-users
+					tolls_share_per_OD[P.get_OD_order(od)] = (tolls_share_per_OD[P.get_OD_order(od)] * revenue_division_rate) / user_flow_per_OD[od]
 
 		# update the strategies
 		for d in D:
@@ -347,9 +362,10 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 			cost = get_cost(P, d, difference_rewards, difference_reward_per_route, NORMALISE_COSTS)
 			
 			if a_posteriori_MCT or delta_tolling or thesis_delta_tolling: 
-				
+
+				# skip if the driver is a non-user
 				additional_cost = 0.0
-				if revenue_division_rate > 0.0:
+				if revenue_division_rate > 0.0 and d.is_user():
 					additional_cost = tolls_share_per_OD[P.get_OD_order(d.get_OD_pair())]
 
 				d.update_strategy(cost, ALPHA, REGRET_AS_COST, a_posteriori_MCT=a_posteriori_MCT, indifferent_MCT=indifferent_MCT, weighted_MCT=weighted_MCT, delta_tolling=delta_tolling, thesis_delta_tolling=thesis_delta_tolling, additional_cost=additional_cost)
@@ -391,8 +407,14 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 			d.update_real_regret(routes_costs_min[d.get_OD_pair()])
 
 		if stat_all or iteration == ITERATIONS-1:
-			gen_real, gen_estimated, gen_diff, gen_relative_diff, sum_regrets = stats.print_statistics_episode(iteration, v, sum_regrets)
-	
+			gen_real, gen_estimated, gen_diff, gen_relative_diff, sum_regrets = stats.print_statistics_episode(iteration, v, sum_regrets, user_ratio)
+
+	# prepare all the strategy matrices of drivers at the end of the simulation to dump in a csv
+	to_csv = [('driver_id', 'r', 'u', 'cost')]
+	for i in range(len(D)):
+		for (r, u), cost in D[i].get_strategy().items():
+			to_csv.append((i, r, u, cost))
+
 	# keep the dynamic plot visible in the end of simulation
 	if dynamic_plot_results:
 		dyn_plotter.show_final()
@@ -404,7 +426,8 @@ def run_simulation(P, iterations=1000, alpha=0.5, epsilon=1.0, alpha_decay=0.99,
 		
 		if plot_results:
 			plotter.plot()
+			plotter_u.plot()
 			plotter_regret.plot()
 
-	return v, gen_real, gen_estimated
+	return v, gen_real, gen_estimated, to_csv
 

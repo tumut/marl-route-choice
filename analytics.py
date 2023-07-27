@@ -118,7 +118,7 @@ class Statistics(object):
 		
 		print '\nLast solution %s = %f' % (S, v)
 		print 'Best value found was of %f' % best
-		
+
 		# print the average strategy (for each OD pair)
 		print '\nAverage strategy per OD pair:'
 		for od in self.__P.get_OD_pairs():
@@ -126,28 +126,30 @@ class Statistics(object):
 			for d in self.__D:
 				if d.get_OD_pair() == od:
 					S = d.get_strategy()
-					for s in S:
-						strategies[s] += S[s]
+					for au in S:
+						a, _ = au
+						strategies[a] += S[au]
 			for s in strategies:
-				strategies[s] = round(strategies[s] / self.__P.get_OD_flow(od), 3)
+				strategies[s] = round(strategies[s] / self.__P.get_OD_flow(od), 3) # TODO: get_od_flow * 1.0 if global.is_adherence_fixed else 2.0
 			print '\t%s\t%s' % (od, strategies)
-		
+
 		print '\nAverage expected cost of drivers per OD pair'
 		expected_cost_sum = { od: 0.0 for od in self.__P.get_OD_pairs() }
 		for d in self.__D:
 			summ = 0.0
-			for r in d.get_strategy():
-				summ += d.get_strategy()[r] * routes_costs_sum[d.get_OD_pair()][r]
+			for ru in d.get_strategy():
+				r, _ = ru
+				summ += d.get_strategy()[ru] * routes_costs_sum[d.get_OD_pair()][r]
 			expected_cost_sum[d.get_OD_pair()] += summ
 		total = 0.0
 		for od in self.__P.get_OD_pairs():
 			total += expected_cost_sum[od]
-			print '%s\t%f' % (od, expected_cost_sum[od] / self.__P.get_OD_flow(od))
-		print 'Average: %f' % (total / self.__P.get_total_flow())
+			print '%s\t%f' % (od, expected_cost_sum[od] / self.__P.get_OD_flow(od)) # TODO: get_od_flow * 1.0 if global.is_adherence_fixed else 2.0
+		print 'Average: %f' % (total / self.__P.get_total_flow()) # TODO: get_od_flow * 1.0 if global.is_adherence_fixed else 2.0
 
 	#-------------------------------------------------------------------
 
-	def print_statistics_episode(self, iteration, v, sum_regrets):
+	def print_statistics_episode(self, iteration, v, sum_regrets, user_ratio):
 		
 		# store the SUM of regrets over all drivers in the CURRENT timestep
 		# for each od [w, x, y, z], where w and x represent the real and estimated 
@@ -202,7 +204,7 @@ class Statistics(object):
 			gen_diff /= self.__P.get_total_flow()
 			gen_relative_diff /= self.__P.get_total_flow()
 		
-		str_print = '%d\t%f\t%f\t%f' % (iteration, v, gen_real, gen_estimated)
+		str_print = '%d\t%f\t%f\t%f\t%f' % (iteration, v, gen_real, gen_estimated, user_ratio)
 		if self.__stat_regret_diff:
 			str_print = '%s\t%f\t%f' % (str_print, gen_diff, gen_relative_diff)
 		
